@@ -14,7 +14,7 @@
 """
 
 # standard python modules
-from xml.etree import ElementTree	# fast xml parser module
+from xml.etree import cElementTree as ElementTree	# fast xml parser module
 import xml.sax
 import string, codecs
 import time, datetime
@@ -35,8 +35,9 @@ def et1_parse(fname):
 	root=tree.getroot()
 	nodes=root.getiterator("node")
 	nbPlace=0
-	nbNode=len(nodes)
+	nbNode=0
 	for node in nodes:	# scan each nodes
+		nbNode=nbNode+1
 		name=""
 		pop=-1
 		type=""
