@@ -22,10 +22,10 @@ import os.path
 import sys,getopt	# handle commande-line arguments
 import sqlite3
 
-__version__="0.1"
+import pyOSM	# pyOSM lib
+
+__version__="0.2"
 default_file='test.xml'
-nbNode=0
-nbPlace=0
 
 def et1_parse(fname):
 	# parse using ElementTree.parse (DOM)
@@ -60,136 +60,31 @@ def et1_parse(fname):
 					pop=-1
 
 	return (nbNode,nbPlace)
+
+class place_parser(pyOSM.osm_parser):
+	def __init__(self,filename="test.xml"):
+		pyOSM.osm_parser.__init__(self,filename)
 	
-def et2_parse(fname):
-	# parse using ElementTree.iterparse (SAX)
-	# do not load the whole file into memory, very fast
-	nbNodes=0
-	nodes={}
-	curr_node = None
-	nbWays=0
-	ways={}
-	curr_way = None
-	nbRelations=0
-	relations={}
-	curr_relation = None
-	nbPlace=0
-	
-	context=ElementTree.iterparse(fname,events=("start","end"))
-	context=iter(context)
-	event, root = context.next()
-	for event, elem in context:
-		if event=="start":
-			if elem.tag=='node':
-				curr_node=Node(id=elem.attrib['id'],lon=elem.attrib['lon'],lat=elem.attrib['lat'])
-			elif elem.tag=='way':
-				curr_way=Way(id=elem.attrib['id'])
-			elif elem.tag=='relation':
-				curr_relation=Relation(id=elem.attrib['id'])
-			elif elem.tag == 'tag':
-				if curr_node:
-					curr_node.tags[elem.attrib['k']] = elem.attrib['v']
-				elif curr_way:
-					curr_way.tags[elem.attrib['k']] = elem.attrib['v']
-				elif curr_relation:
-					curr_relation.tags[elem.attrib['k']] = elem.attrib['v']
-			elif elem.tag == "nd":
-				assert curr_node is None, "curr_node (%r) is non-none" % (curr_node)
-				assert curr_way is not None, "curr_way is None"
-				curr_way.nodes.append(NodePlaceHolder(id=elem.attrib['ref']))
-			elif elem.tag == "member":
-				assert curr_node is None, "curr_node (%r) is non-none" % (curr_node)
-				assert curr_way is None, "curr_way (%r) is non-none" % (curr_way)
-				assert curr_relation is not None, "curr_relation is None"
-				curr_relation.members.append(NodePlaceHolder(id=elem.attrib['ref'], type=elem.attrib['type']))
-			else:
-				print "unknown element %s" % elem.tag
-		elif event=="end":
-			if elem.tag=='node':
+	def check_elem(self,element):
+		try:
+			element.type=element.tags['place']
+			if element.type=='town' or element.type=='city' or element.type=='village':
 				try:
-					curr_node.type=curr_node.tags['place']
-					if curr_node.type=='town' or curr_node.type=='city' or curr_node.type=='village':
-						try:
-							curr_node.name=curr_node.tags['name']
-						except:
-							curr_node.name=""
-						try:
-							curr_node.pop=int(curr_node.tags['population'])
-						except:
-							curr_node.pop=-1
-						#print curr_node.id,curr_node.name
-						nodes[curr_node.id] = curr_node
-					curr_node = None
+					element.name=element.tags['name']
 				except:
-					curr_node = None
-				nbNodes=nbNodes+1
-			elif elem.tag=='way':
-				curr_way=None
-				nbWays=nbWays+1
-			elif elem.tag=='relation':
-				curr_relation=None
-				nbRelations=nbRelations+1
-			elem.clear()	# remove leme from memory
-			
-	root.clear()
-	nbPlace=len(nodes)
-	
-	return (nbNodes,nbPlace)
-
-class Node(object):
-    def __init__(self, id=None, lon=None, lat=None, tags=None):
-        self.id = id
-        self.lon, self.lat = lon, lat
-        if tags:
-            self.tags = tags
-        else:
-            self.tags = {}
-
-    def __repr__(self):
-        return "Node(id=%r, lon=%r, lat=%r, tags=%r)" % (self.id, self.lon, self.lat, self.tags)
-
-class Way(object):
-    def __init__(self, id, nodes=None, tags=None):
-        self.id = id
-        if nodes:
-            self.nodes = nodes
-        else:
-            self.nodes = []
-        if tags:
-            self.tags = tags
-        else:
-            self.tags = {}
-
-    def __repr__(self):
-        return "Way(id=%r, nodes=%r, tags=%r)" % (self.id, self.nodes, self.tags)
-
-class Relation(object):
-    def __init__(self, id, members=None, tags=None):
-      self.id = id
-      if members:
-          self.members = None
-      else:
-          self.members = []
-      if tags:
-          self.tags = tags
-      else:
-          self.tags = {}
-      
-    def __repr__(self):
-      return "Relation(id=%r, members=%r, tags=%r)" % (self.id, self.members, self.tags)
-
-class NodePlaceHolder(object):
-    def __init__(self, id, type=None):
-        self.id = id
-        self.type = type
-
-    def __repr__(self):
-        return "NodePlaceHolder(id=%r, type=%r)" % (self.id, self.type)
-
+					element.name=""
+				try:
+					element.pop=int(element.tags['population'])
+				except:
+					element.pop=0
+				return element.id
+		except:
+			element.type=''
+			return -1
+		
 class OSMXMLFile(object):
-	def __init__(self, filename, loadRelated=False):
+	def __init__(self, filename):
 		self.filename = filename
-		self.loadRelated=loadRelated
 		self.nodes={}
 		self.ways={}
 		self.relations={}
@@ -213,70 +108,11 @@ class OSMXMLFile(object):
 		parser=xml.sax.make_parser()
 		parser.setContentHandler(OSMXMLFileParser(self))
 		parser.parse(self.filename)
-
-		# if requested : load related elements *** DO NOT WORKS ***
-		if self.loadRelated:
-			loadWay=OSMWayLoadingList()
-			loadWay.build(self.relations,self.ways,self.nodes)
-			parser=xml.sax.make_parser()
-			parser.setContentHandler(OSMWayParser(self,loadWay))
-			parser.parse(self.filename)
-			
-			loadNode=OSMNodeLoadingList()
-			loadNode.build(self.ways,self.nodes)
-			parser=xml.sax.make_parser()
-			parser.setContentHandler(OSMNodeParser(self,loadNode))
-			parser.parse(self.filename)
-			
-			for way in self.ways.values():
-				try:
-					way.nodes = [self.nodes[node_pl.id] for node_pl in way.nodes]
-				except:
-					print "missing nodes for way",way.id
-
-			for relation in self.relations.values():
-				try:
-					relation.members = [self.__get_obj(obj_pl.id, obj_pl.type) for obj_pl in relation.members]
-				except:
-					print "missing membres for relation",relation.id
 	
 		# convert them back to lists
 		self.nodes = self.nodes.values()
 		self.ways = self.ways.values()
 		self.relations = self.relations.values()
-
-class OSMLoadingList():
-	def __init__(self):
-		self.nb=0
-		self.list=[]
-
-class OSMNodeLoadingList(OSMLoadingList):
-	def __init__(self):
-		OSMLoadingList.__init__(self)
-		self.nbNodes=0
-		self.nodes={}
-		
-	def build(self,ways,nodes):
-		for w in ways:
-			for n in w.nodes:
-				if n.id not in nodes:
-					self.list.append(n.id)
-
-class OSMWayLoadingList(OSMLoadingList):
-	def __init__(self):
-		OSMLoadingList.__init__(self)
-		self.nbWays=0
-		self.ways={}
-		
-	def build(self,relations,ways,nodes):
-		for r in relations:
-			for m in r.members:
-				if m.type=='node':
-					if m.id not in nodes:
-						self.list.append(m.id)			
-				elif m.type=='way':
-					if m.id not in ways:
-						self.list.append(m.id)
 
 class OSMWayParser(xml.sax.ContentHandler):
 	def __init__(self, containing_obj, loadingList):
@@ -411,7 +247,7 @@ def sax_parse(fname):
 	# parse using ElementTree.iterparse (SAX)
 	# do not load the whole file into memory, very fast
 	
-	osm=OSMXMLFile(fname,loadRelated=False)
+	osm=OSMXMLFile(fname)
 	nbNode=osm.nbNodes
 	nbPlace=len(osm.nodes)
 	
@@ -446,32 +282,49 @@ def main(argv):
 		usage()
 		sys.exit(2)
 	
-	print "-------------------------------------------------"
-	print "ElementTree (DOM)"
-	if fsize<100000000:
-		t0=time.time()
-		(nbtot,nb)=et1_parse(file)
-		t0=time.time()-t0
-		print "> %d nodes parsed, %d match" % (nbtot,nb)
-		print "> element tree parsing : %.1f seconds" % t0
-	else:
-		print "> do not handle file size > 100 MB",fsize
+	if False:
+		print "-------------------------------------------------"
+		print "ElementTree (DOM)"
+		if fsize<100000000:
+			t0=time.time()
+			(nbtot,nb)=et1_parse(file)
+			t0=time.time()-t0
+			print "> %d nodes parsed, %d match" % (nbtot,nb)
+			print "> element tree parsing : %.1f seconds" % t0
+		else:
+			print "> do not handle file size > 100 MB",fsize
 
 	print "-------------------------------------------------"
 	print "ElementTree (iterparse)"
 	t0=time.time()
-	(nbtot,nb)=et2_parse(file)
+	p=place_parser(file)
+	p.parse()
 	t0=time.time()-t0
-	print "> %d nodes parsed, %d match" % (nbtot,nb)
 	print "> element tree parsing : %.1f seconds" % t0
-
-	print "-------------------------------------------------"
-	print "xml.sax"
+	print "> %d nodes parsed, %d match" % (p.nbNodes,len(p.nodes))
+	print "> %d ways parsed, %d match" % (p.nbWays,len(p.ways))
+	print "> %d relations parsed, %d match" % (p.nbRelations,len(p.relations))
 	t0=time.time()
-	(nbtot,nb)=sax_parse(file)
+	p.load_related()
 	t0=time.time()-t0
-	print "> %d nodes parsed, %d match" % (nbtot,nb)
-	print "> element tree parsing : %.1f seconds" % t0
+	print "> load related items : %.1f seconds" % t0
+	print "> %d nodes parsed, %d total" % (p.nbNodes,len(p.nodes))
+	print "> %d ways parsed, %d total" % (p.nbWays,len(p.ways))
+	print "> %d relations parsed, %d total" % (p.nbRelations,len(p.relations))
+	t0=time.time()
+	pois=p.create_nodes("result.osm")
+	t0=time.time()-t0
+	print "> create pois : %.1f seconds" % t0
+	print "> %d pois created" % len(pois)
+
+	if False:
+		print "-------------------------------------------------"
+		print "xml.sax"
+		t0=time.time()
+		(nbtot,nb)=sax_parse(file)
+		t0=time.time()-t0
+		print "> %d nodes parsed, %d match" % (nbtot,nb)
+		print "> element tree parsing : %.1f seconds" % t0
 
 	print "-------------------------------------------------"
 
